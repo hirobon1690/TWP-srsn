@@ -1501,6 +1501,7 @@ twpConfig
           text: "Hello",
           source_lang: "en",
           target_lang: "ja",
+          style: readSarashinaStyle(),
         }),
       });
       return {
@@ -1512,18 +1513,36 @@ twpConfig
 
     // API limits: [input, default, minimum]
     const sarashinaLimitInputs = {
-      requestsPerWindow: ["#sarashinaRequests", 6, 1],
+      requestsPerWindow: ["#sarashinaRequests", 30, 1],
       windowSeconds: ["#sarashinaWindow", 60, 1],
-      maxCharacters: ["#sarashinaMaxChars", 4700, 100],
+      maxCharacters: ["#sarashinaMaxChars", 5000, 100, 5000],
     };
+
+    // style of the Japanese text, sent as the `style` parameter of the API
+    const defaultSarashinaStyle = "plain";
+    // styles saved by older versions, which put an instruction before the text
+    const oldSarashinaStyles = { none: "auto", dearu: "plain", desumasu: "polite" };
+
+    function readSarashinaStyle() {
+      return $("#sarashinaStyle").value || defaultSarashinaStyle;
+    }
+
+    function showSarashinaStyle(style) {
+      style = oldSarashinaStyles[style] || style;
+      $("#sarashinaStyle").value = ["auto", "plain", "polite"].includes(style)
+        ? style
+        : defaultSarashinaStyle;
+    }
 
     function readSarashinaLimits() {
       const limits = {};
-      for (const [name, [selector, defaultValue, minimum]] of Object.entries(
-        sarashinaLimitInputs
-      )) {
+      for (const [
+        name,
+        [selector, defaultValue, minimum, maximum = Infinity],
+      ] of Object.entries(sarashinaLimitInputs)) {
         const value = Math.floor(Number($(selector).value));
-        limits[name] = value >= minimum ? value : defaultValue;
+        limits[name] =
+          value >= minimum ? Math.min(value, maximum) : defaultValue;
         $(selector).value = limits[name];
       }
       return limits;
@@ -1555,7 +1574,7 @@ twpConfig
       if (!endpointUrl) return;
       const limits = {
         ...readSarashinaLimits(),
-        style: $("#sarashinaStyle").value,
+        style: readSarashinaStyle(),
         endpointUrl,
       };
       const customServices = twpConfig.get("customServices");
@@ -1582,7 +1601,7 @@ twpConfig
       Object.values(sarashinaLimitInputs).forEach(([selector, defaultValue]) => {
         $(selector).value = defaultValue;
       });
-      $("#sarashinaStyle").value = "dearu";
+      $("#sarashinaStyle").value = defaultSarashinaStyle;
       $("#sarashinaEndpoint").value = defaultSarashinaEndpoint;
       saveSarashinaLimits();
     };
@@ -1592,9 +1611,10 @@ twpConfig
       if (!endpointUrl) return;
       const sarashina = {
         name: "sarashina",
+        model: "sarashina3.2-translate",
         apiKey: $("#sarashinaKEY").value.trim(),
         ...readSarashinaLimits(),
-        style: $("#sarashinaStyle").value,
+        style: readSarashinaStyle(),
         endpointUrl,
       };
       try {
@@ -1679,7 +1699,7 @@ twpConfig
       )) {
         $(selector).value = sarashina[name] ?? defaultValue;
       }
-      $("#sarashinaStyle").value = sarashina.style ?? "dearu";
+      showSarashinaStyle(sarashina.style);
       $("#sarashinaEndpoint").value =
         sarashina.endpointUrl ?? defaultSarashinaEndpoint;
     }

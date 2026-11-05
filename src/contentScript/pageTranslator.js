@@ -977,7 +977,7 @@ Promise.all([twpConfig.onReady(), getTabHostName()]).then(function (_) {
   const sarashinaSeparator = " … ";
 
   /**
-   * Sarashina allows only 6 requests per minute: the whole page is sent at once, nearest to the viewport
+   * Sarashina allows only 30 requests per minute: the whole page is sent at once, nearest to the viewport
    * first, so the background can pack it into as few requests as possible.
    */
   function translateWithSarashina(

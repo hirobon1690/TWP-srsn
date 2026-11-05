@@ -1634,6 +1634,23 @@ const translationService = (function () {
   };
 
   /**
+   * @typedef {"auto" | "plain" | "polite"} SarashinaStyle
+   */
+  const DEFAULT_SARASHINA_STYLE = "plain";
+  /**
+   * Converts the styles saved by older versions, which put an instruction before the text.
+   * @param {string} style
+   * @returns {SarashinaStyle}
+   */
+  const normalizeSarashinaStyle = (style) => {
+    const oldStyles = { none: "auto", dearu: "plain", desumasu: "polite" };
+    style = oldStyles[style] || style;
+    return ["auto", "plain", "polite"].includes(style)
+      ? style
+      : DEFAULT_SARASHINA_STYLE;
+  };
+
+  /**
    * @typedef {Object} SarashinaQueueItem
    * @property {string} key Identifies the paragraph this item belongs to (used to prioritize it).
    * @property {number} queuedAt
@@ -1648,15 +1665,15 @@ const translationService = (function () {
   /**
    * Creates the Sarashina translation service (https://docs.sarashina.ai/api-reference/translate).
    *
-   * The API only translates between ja and en, accepts a single text per request (max 5000 characters)
-   * and is limited to 6 requests per minute. So instead of using the request logic of `Service`,
+   * The API (sarashina3.2-translate) only translates between ja and en, accepts a single text per request
+   * (max 5000 characters) and is limited to 30 requests per minute. So instead of using the request logic of `Service`,
    * paragraphs are queued and packed one per line into batches that are sent through a rate limiter.
    *
    * The page translator sends the whole page, ordered by distance from the viewport. When the remaining
    * paragraphs fit in the free request slots, they are split evenly between them and sent in parallel;
    * otherwise each request is filled up to `maxBatchLength`. Text translations are sent first.
    * @param {string} apiKey
-   * @param {{requestsPerWindow?: number, windowSeconds?: number, maxCharacters?: number, style?: "none" | "dearu" | "desumasu", endpointUrl?: string}} limits
+   * @param {{requestsPerWindow?: number, windowSeconds?: number, maxCharacters?: number, style?: SarashinaStyle, endpointUrl?: string}} limits
    * @returns {Service} sarashinaService
    */
   const createSarashinaService = (apiKey, limits = {}) => {
@@ -1669,37 +1686,25 @@ const translationService = (function () {
     // request slot.
     const SMALL_BATCH_WAIT = 2000;
 
-    // The translate API has no option for the style of the Japanese text, but it follows an instruction
-    // put before the text. Written in Japanese with the sentence endings spelled out, the instruction
-    // itself is not returned.
-    const STYLE_INSTRUCTIONS = {
-      none: "",
-      dearu:
-        "（翻訳者への指示：文末は「〜だ」「〜である」「〜した」のように書き、「〜です」「〜ます」「〜しました」は使わないこと）",
-      desumasu:
-        "（翻訳者への指示：文末は「〜です」「〜ます」「〜しました」のように書き、「〜だ」「〜である」「〜した」で終えないこと）",
-    };
-    let translationStyle = "dearu";
-    const getInstruction = (targetLanguage) =>
-      targetLanguage === "ja" ? STYLE_INSTRUCTIONS[translationStyle] : "";
-    // the instruction, when the translation returns it anyway
-    const isInstructionLine = (line) =>
-      /翻訳者への指示|^[（(]?翻訳者注/.test(line.trim());
-    // translations in another style must not come from the cache
+    // The style of the Japanese text: "auto" (chosen by the model), "plain" (だ・である) or
+    // "polite" (です・ます). It only applies when translating into Japanese.
+    let translationStyle = DEFAULT_SARASHINA_STYLE;
+    const getStyle = (targetLanguage) =>
+      targetLanguage === "ja" ? translationStyle : undefined;
+    // Translations of another model or style must not come from the cache.
     const getCacheName = (targetLanguage) => {
-      const name = getInstruction(targetLanguage)
-        ? "sarashina-" + translationStyle
-        : "sarashina";
+      const style = getStyle(targetLanguage);
+      const name = style ? "sarashina3.2-" + style : "sarashina3.2";
       return apiUrl === DEFAULT_API_URL
         ? name
         : name + "-" + encodeURIComponent(apiUrl);
     };
 
     // The API limits, configurable in the options page (see `setLimits`)
-    let maxRequests = 6;
+    let maxRequests = 30;
     let rateLimitWindow = 62000;
-    let maxTextLength = 4700;
-    let maxBatchLength = 4600;
+    let maxTextLength = 5000;
+    let maxBatchLength = 5000;
     // Don't split the remaining paragraphs into batches smaller than this.
     let minSplitLength = 1000;
     // When the page doesn't fit in the free slots, the first batch is kept small so the paragraphs
@@ -1707,28 +1712,27 @@ const translationService = (function () {
     let firstBatchLength = 1500;
 
     /**
-     * @param {{requestsPerWindow?: number, windowSeconds?: number, maxCharacters?: number, style?: "none" | "dearu" | "desumasu", endpointUrl?: string}} limits
+     * @param {{requestsPerWindow?: number, windowSeconds?: number, maxCharacters?: number, style?: SarashinaStyle, endpointUrl?: string}} limits
      */
     const setLimits = ({
-      requestsPerWindow = 6,
+      requestsPerWindow = 30,
       windowSeconds = 60,
-      maxCharacters = 4700,
-      style = "dearu",
+      maxCharacters = 5000,
+      style = DEFAULT_SARASHINA_STYLE,
       endpointUrl = DEFAULT_API_URL,
     } = {}) => {
       apiUrl = endpointUrl;
-      translationStyle = STYLE_INSTRUCTIONS[style] !== undefined ? style : "dearu";
-      maxRequests = Math.max(1, Math.floor(requestsPerWindow) || 6);
+      translationStyle = normalizeSarashinaStyle(style);
+      maxRequests = Math.max(1, Math.floor(requestsPerWindow) || 30);
       // A request sent exactly 60s after the first one of the window was still rejected.
       rateLimitWindow = Math.max(1, Number(windowSeconds) || 60) * 1000 + 2000;
-      maxTextLength = Math.max(100, Math.floor(maxCharacters) || 4700);
-      // Paragraphs are packed up to the limit, leaving room for the style instruction and its line
-      // break (the line breaks between paragraphs are counted when packing).
-      const instructionLength = STYLE_INSTRUCTIONS[translationStyle].length;
-      maxBatchLength = Math.max(
-        50,
-        maxTextLength - (instructionLength ? instructionLength + 1 : 0),
+      // The API counts code points, String.length counts UTF-16 units: never fewer.
+      maxTextLength = Math.min(
+        5000,
+        Math.max(100, Math.floor(maxCharacters) || 5000),
       );
+      // Paragraphs are packed up to the limit (the line breaks between them are counted when packing).
+      maxBatchLength = maxTextLength;
       minSplitLength = Math.min(1000, maxBatchLength);
       firstBatchLength = Math.min(1500, maxBatchLength);
     };
@@ -1939,14 +1943,10 @@ const translationService = (function () {
             Authorization: "Bearer " + apiKey,
           },
           body: JSON.stringify({
-            text: [
-              getInstruction(batch[0].targetLanguage),
-              ...batch.map((item) => item.text),
-            ]
-              .filter((text) => text)
-              .join("\n"),
+            text: batch.map((item) => item.text).join("\n"),
             source_lang: batch[0].sourceLanguage,
             target_lang: batch[0].targetLanguage,
+            style: getStyle(batch[0].targetLanguage),
           }),
         });
 
@@ -1966,35 +1966,16 @@ const translationService = (function () {
         }
 
         /** @type {string} */
-        const translatedText = (await response.json()).translated_text
-          .split("\n")
-          .filter((line) => !isInstructionLine(line))
-          .join("\n");
+        const translatedText = (await response.json()).translated_text;
         if (batch.length === 1) {
           // the API ends lines with two spaces (markdown line breaks)
-          let lines = translatedText.replace(/[ \t]+\n/g, "\n").trim().split("\n");
-          // the instruction was returned, translated into something else
-          const sourceLineCount = batch[0].text.split("\n").filter((l) => l.trim()).length;
-          if (
-            getInstruction(batch[0].targetLanguage) &&
-            lines.filter((l) => l.trim()).length === sourceLineCount + 1
-          ) {
-            lines = lines.slice(lines.findIndex((l) => l.trim()) + 1);
-          }
-          batch[0].resolve(lines.join("\n").trim());
+          batch[0].resolve(translatedText.replace(/[ \t]+\n/g, "\n").trim());
           return;
         }
 
         let lines = translatedText.split("\n").map((line) => line.trim());
         if (lines.length !== batch.length) {
           lines = lines.filter((line) => line);
-        }
-        // the instruction was returned, translated into something else
-        if (
-          lines.length === batch.length + 1 &&
-          getInstruction(batch[0].targetLanguage)
-        ) {
-          lines.shift();
         }
         if (lines.length === batch.length) {
           batch.forEach((item, i) => item.resolve(lines[i]));
@@ -2069,9 +2050,7 @@ const translationService = (function () {
       let promise = translationsInProgress.get(key);
       if (!promise) {
         if (queue.length === 0 && requestsInFlight === 0) startedFromIdle = true;
-        const maxLength = isTextTranslation
-          ? maxTextLength - getInstruction(targetLanguage).length - 1
-          : maxBatchLength;
+        const maxLength = isTextTranslation ? maxTextLength : maxBatchLength;
         promise = Promise.all(
           splitText(text, maxLength).map(
             (part) =>
