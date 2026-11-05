@@ -265,7 +265,7 @@ twpConfig
 
     let showSelectTargetLanguage = false;
 
-    // Sarashina allows only 6 requests per minute, so a long page takes a while: show the progress
+    // Sarashina allows only 30 requests per minute, so a long page takes a while: show the progress
     const sarashinaStatus = document.getElementById("sarashinaStatus");
     const btnSarashinaRestart = document.getElementById("btnSarashinaRestart");
     // drops the whole queue (of all tabs) and sends again the paragraphs of this page that are still waiting

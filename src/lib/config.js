@@ -52,7 +52,7 @@ const twpConfig = (function () {
     translateSelectedWhenPressTwice: "no",
     translateTextOverMouseWhenPressTwice: "no",
     translateClickingOnce: "no",
-    // on by default: Sarashina allows only a few requests per minute
+    // on by default: Sarashina allows only 30 requests per minute
     enableDiskCache: "yes",
     useAlternativeService: "yes",
     customServices: [],
@@ -229,6 +229,20 @@ const twpConfig = (function () {
       // load config; convert object/array to map/set if necessary
       for (const name in onGot) {
         config[name] = fixObjectType(name, onGot[name]);
+      }
+
+      // Settings saved for Sarashina Translate 3: move the old defaults to the higher limits of 3.2
+      // and the styles (which were an instruction put before the text) to its `style` parameter.
+      const oldSarashina = config.customServices.find(
+        (service) => service.name === "sarashina" && !service.model
+      );
+      if (oldSarashina) {
+        if (oldSarashina.requestsPerWindow === 6) oldSarashina.requestsPerWindow = 30;
+        if (oldSarashina.maxCharacters === 4700) oldSarashina.maxCharacters = 5000;
+        const oldStyles = { none: "auto", dearu: "plain", desumasu: "polite" };
+        oldSarashina.style = oldStyles[oldSarashina.style] || oldSarashina.style || "plain";
+        oldSarashina.model = "sarashina3.2-translate";
+        chrome.storage.local.set({ customServices: config.customServices });
       }
 
       // Sarashina becomes available after an API key has been registered.
